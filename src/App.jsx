@@ -139,7 +139,10 @@ function saveStatusLabel(status, lastSavedAt) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(false);
-  const [step, setStep] = useState('code');
+  // Per-track deployments are pinned to one event via config.js — the judge
+  // never needs to type a code, so skip straight past that screen. The
+  // shared dev sandbox leaves EVENT_CODE blank and still starts on 'code'.
+  const [step, setStep] = useState(() => (EVENT_CODE ? 'signin' : 'code'));
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
@@ -176,6 +179,10 @@ export default function App() {
 
   useEffect(() => { scoresRef.current = scores; }, [scores]);
   useEffect(() => { notesRef.current = notes; }, [notes]);
+
+  useEffect(() => {
+    if (EVENT_CODE) localStorage.setItem(CURRENT_CODE_KEY, EVENT_CODE);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -235,11 +242,11 @@ export default function App() {
 
   async function bootstrap(s) {
     setError('');
-    // Resolving the events table requires an authenticated role (RLS), so a
-    // code typed before sign-in can't be validated yet — submitCode() just
-    // stores it and this is where it actually gets looked up, for both the
-    // immediate post-guest-signin path and the OAuth-redirect round trip
-    // (where component state, including eventRow, was lost on reload).
+    // Resolving the events table requires an authenticated role (RLS), so
+    // the code (pinned via config.js on this deployment) can't be validated
+    // until there's a session — this is where it actually gets looked up,
+    // including after the OAuth-redirect round trip (where component state,
+    // including eventRow, was lost on reload).
     let ev = eventRow;
     if (!ev) {
       const code = localStorage.getItem(CURRENT_CODE_KEY);
@@ -450,7 +457,7 @@ export default function App() {
   async function signInGoogle() {
     setError('');
     const { error: e } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } });
-    if (e) setError('Google sign-in failed. Try email or guest.');
+    if (e) setError('Google sign-in failed. Try the email link instead.');
   }
   async function sendMagic() {
     setError(''); setInfo('');
@@ -461,12 +468,6 @@ export default function App() {
     setBusy(false);
     if (e) setError('Could not send the link. Check the address.'); else setInfo('Check your email for a sign-in link.');
   }
-  async function signInGuest() {
-    setError('');
-    const { error: e } = await supabase.auth.signInAnonymously();
-    if (e) setError('Guest sign-in is not enabled. Use email or Google.');
-  }
-
   function submitCode() {
     setError('');
     const code = codeInput.trim().toUpperCase();
@@ -563,8 +564,6 @@ export default function App() {
         <label>Email sign-in link</label>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" />
         <button className="btn outline" onClick={sendMagic} disabled={busy}>{busy ? 'Sending…' : 'Email me a link'}</button>
-        <div className="divider">or</div>
-        <button className="btn ghost" onClick={signInGuest}>Continue as guest</button>
         {info && <div className="ok">{info}</div>}
         {error && <div className="err">{error}</div>}
         <SponsorFooter />
