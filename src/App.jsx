@@ -169,6 +169,8 @@ export default function App() {
   // Set when a submit is blocked by unscored (entry, category) pairs. The list
   // itself is derived live from scores, so it shrinks as the judge fills it in.
   const [showMissing, setShowMissing] = useState(false);
+  // Last-chance window shown once every score is in, before they're locked.
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const ejRef = useRef(null);
   const scoresRef = useRef({});
@@ -497,6 +499,7 @@ export default function App() {
 
   async function submitAll() {
     if (!ejRef.current) return;
+    setError('');
     setBusy(true);
     // Includes writes that exhausted their retries — nothing else retries
     // those, and a judge whose connection came back would otherwise be stuck.
@@ -510,8 +513,24 @@ export default function App() {
       return;
     }
     setShowMissing(false);
+    setBusy(false);
+    setConfirmOpen(true);
+  }
+
+  async function confirmSubmit() {
+    if (!ejRef.current) return;
+    setBusy(true);
+    // A save rejected after the window opened can un-score a pair, so the
+    // completeness rule is enforced again right before locking.
+    if (unscoredPairs(entries, categories, scoresRef.current).length > 0) {
+      setShowMissing(true);
+      setConfirmOpen(false);
+      setBusy(false);
+      return;
+    }
     const { error: e } = await supabase.from('event_judges').update({ submitted_at: new Date().toISOString() }).eq('id', ejRef.current.id);
     setBusy(false);
+    setConfirmOpen(false);
     if (e) { setError('Submit failed — your scores are saved. Try submitting again.'); return; }
     setStep('submitted');
   }
@@ -621,6 +640,21 @@ export default function App() {
         <p className="muted-note" style={{ marginTop: '12px' }}>You can return and change scores until you submit.</p>
 
         <SponsorFooter />
+
+        {confirmOpen && (
+          <div className="modal-overlay" onClick={() => { if (!busy) setConfirmOpen(false); }}>
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-submit-title" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2 id="confirm-submit-title">Ready to submit?</h2>
+              </div>
+              <div className="modal-body">
+                <p className="muted-note" style={{ margin: 0 }}>Once you submit, your scores are locked and can't be changed.</p>
+                <button className="btn primary" onClick={confirmSubmit} disabled={busy}>{busy ? 'Submitting…' : 'Submit and lock'}</button>
+                <button className="btn outline" onClick={() => setConfirmOpen(false)} disabled={busy}>Go back</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {openEntry != null && (
           <EntryModal
