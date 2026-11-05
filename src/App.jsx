@@ -180,6 +180,31 @@ export default function App() {
   const retries = useRef({});
   const inFlight = useRef(0);
   const hardFailed = useRef(new Set());
+  // Callbacks registered once (auth listener, timers) need the live step.
+  const stepRef = useRef(step);
+  useEffect(() => { stepRef.current = step; }, [step]);
+  const signedOutRef = useRef(false);
+
+  // The browser can lose its sign-in mid-scoring (e.g. a magic link opened in
+  // a different browser app or an in-app email browser). Without a session,
+  // supabase-js silently sends writes as anonymous and RLS rejects them, so
+  // instead of retrying into a wall, stop writing and send the judge back to
+  // sign in. Unsynced scores stay in the localStorage mirror; loadScoring()
+  // re-queues them after the next sign-in on this device.
+  function handleSignedOut() {
+    if (signedOutRef.current) return;
+    if (stepRef.current !== 'scoring' && stepRef.current !== 'name') return;
+    signedOutRef.current = true;
+    hardFailed.current.clear();
+    retries.current = {};
+    setSaveStatus('idle');
+    setSession(null);
+    setOpenEntry(null);
+    setConfirmOpen(false);
+    setError('');
+    setInfo("You were signed out. Your scores are saved on this device — sign in again on this same browser and they'll sync automatically.");
+    setStep('signin');
+  }
 
   useEffect(() => { scoresRef.current = scores; }, [scores]);
   useEffect(() => { notesRef.current = notes; }, [notes]);
@@ -197,7 +222,7 @@ export default function App() {
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s);
-      if (s) bootstrap(s);
+      if (s) bootstrap(s); else handleSignedOut();
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
@@ -245,6 +270,7 @@ export default function App() {
   }, [eventRow]);
 
   async function bootstrap(s) {
+    signedOutRef.current = false;
     setError('');
     // Resolving the events table requires an authenticated role (RLS), so
     // the code (pinned via config.js on this deployment) can't be validated
@@ -380,7 +406,11 @@ export default function App() {
   }
 
   async function flush(key) {
-    if (!ejRef.current) return;
+    if (!ejRef.current || signedOutRef.current) return;
+    // Never write without a session — it would go out as anonymous and be
+    // rejected. Keep the key pending; it's re-queued after sign-in.
+    const { data: sd } = await supabase.auth.getSession();
+    if (!sd || !sd.session) { dirty.current.add(key); handleSignedOut(); return; }
     const ejId = ejRef.current.id;
     dirty.current.delete(key);
     inFlight.current += 1;
@@ -415,7 +445,15 @@ export default function App() {
       retries.current[key] = 0;
       hardFailed.current.delete(key);
     } catch (e) {
-      if (key.startsWith('s:') && e && e.code === '23514') {
+      // Permission/JWT failures: if the session is actually gone, this isn't
+      // retryable — hand off to the signed-out flow instead of burning retries.
+      const authish = e && (e.code === '42501' || e.code === 'PGRST301' || e.code === 'PGRST303' || e.status === 401);
+      const lostSession = authish && !((await supabase.auth.getSession()).data.session);
+      if (lostSession) {
+        ok = false;
+        dirty.current.add(key);
+        handleSignedOut();
+      } else if (key.startsWith('s:') && e && e.code === '23514') {
         // DB rejected the score as outside the category's range
         // (check_violation) — shouldn't normally happen, since ScoreInput
         // already validates against the same min/max, but a category's
