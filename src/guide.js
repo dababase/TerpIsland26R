@@ -48,5 +48,5 @@ export const GUIDE = [
   ] },
 
   { h: 'Transparency & Exposure' },
-  { p: 'We encourage you to share your judging experience! Tag **@HeadyHappeningSesh** and **@FireFarmsMaui** and help keep our traditions alive while inspiring future hash connoisseurs.' },
+  { p: 'We encourage you to share your judging experience! Tag **@HeadyHappeningSesh**, **@FireFarmsMaui** and **@dababase.app** and help keep our traditions alive while inspiring future hash connoisseurs.' },
 ];
