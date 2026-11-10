@@ -214,6 +214,42 @@ export default function App() {
   useEffect(() => { scoresRef.current = scores; }, [scores]);
   useEffect(() => { notesRef.current = notes; }, [notes]);
 
+  // The entry list is loaded once per page load. If the organizer adds or
+  // removes an entry mid-event, a judge with the page already open would
+  // keep scoring (and could submit) against the old list. Re-check the
+  // server's list periodically, on returning to the tab, and before submit;
+  // when it differs, show a refresh banner and hold submit until they do.
+  const [entriesStale, setEntriesStale] = useState(null); // server count when stale
+  const entriesRef = useRef([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  const trackRef = useRef(null);
+  useEffect(() => { trackRef.current = trackRow; }, [trackRow]);
+
+  async function checkEntriesStale() {
+    const track = trackRef.current;
+    if (!track || stepRef.current !== 'scoring') return false;
+    const { data, error: e } = await supabase.from('entries').select('id').eq('track_id', track.id);
+    if (e || !data) return false;
+    const local = new Set(entriesRef.current.map((x) => x.id));
+    const changed = data.length !== local.size || data.some((r) => !local.has(r.id));
+    setEntriesStale(changed ? data.length : null);
+    return changed;
+  }
+
+  async function refreshForNewEntries() {
+    setBusy(true);
+    const pending = Array.from(new Set([...dirty.current, ...hardFailed.current]));
+    await Promise.all(pending.map((k) => flush(k)));
+    window.location.reload();
+  }
+
+  useEffect(() => {
+    const iv = setInterval(() => { checkEntriesStale(); }, 120000);
+    const onVis = () => { if (document.visibilityState === 'visible') checkEntriesStale(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+
   useEffect(() => {
     if (EVENT_CODE) localStorage.setItem(CURRENT_CODE_KEY, EVENT_CODE);
   }, []);
@@ -565,6 +601,12 @@ export default function App() {
     // those, and a judge whose connection came back would otherwise be stuck.
     const pending = Array.from(new Set([...dirty.current, ...hardFailed.current]));
     await Promise.all(pending.map((k) => flush(k)));
+    // Never let a judge submit against an outdated entry list.
+    if (await checkEntriesStale()) {
+      setBusy(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     // Rechecked on every tap: a judge can't submit until every (entry,
     // category) pair has a confirmed score.
     if (unscoredPairs(entries, categories, scoresRef.current).length > 0) {
@@ -670,6 +712,14 @@ export default function App() {
         {saveStatus !== 'idle' && (
           <div className={'save-status' + ((saveStatus === 'error' || saveStatus === 'retrying') ? ' save-status-error' : '')}>
             {saveStatusLabel(saveStatus, lastSavedAt)}
+          </div>
+        )}
+        {entriesStale !== null && (
+          <div className="stale-banner">
+            <div className="stale-banner-text">
+              The entry list was updated — there are now <strong>{entriesStale} entries</strong>. Tap refresh to see them. Your scores are saved.
+            </div>
+            <button className="btn primary" onClick={refreshForNewEntries} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</button>
           </div>
         )}
 
